@@ -1,0 +1,191 @@
+rm(list = ls())
+options(stringsAsFactors = F)
+getwd(); dir()
+library(reshape2)
+library(dplyr)
+
+#1. intersection for network candidates-----------------------
+setwd("C:/Users/10613/Desktop/纯办法/code-down_new/code-down_new/")
+load(file = 'mRNA_lnc_cor.Rdata')
+load(file = 'mRNA_miR_cor.Rdata')
+load(file = 'lnc_miR_cor.Rdata')
+lnc_FPKM = read.csv(file = 'data/lnc_transcripts.FPKM.csv')
+#给lnc注释
+x<-c(2,4)
+ID<-lnc_FPKM[,x]
+mRNA_lnc_cor = merge(mRNA_lnc_cor,ID, by.x = 'lncNA', 
+                     by.y = 'transcript_name')
+lnc_miR_cor = merge(lnc_miR_cor,ID, by.x = 'lnc', 
+                    by.y = 'transcript_name')
+mRNA_candi = intersect(mRNA_lnc_cor$mRNA,mRNA_miR_cor$mRNA)
+lnc_candi = intersect(lnc_miR_cor$lnc,mRNA_lnc_cor$lncNA)
+mir_candi = intersect(lnc_miR_cor$miRNA, mRNA_miR_cor$miRNA)
+
+lnc_miR_cor = lnc_miR_cor %>% filter(lnc %in% lnc_candi & 
+                                       miRNA %in% mir_candi)
+mRNA_lnc_cor = mRNA_lnc_cor %>% filter(lncNA %in% lnc_candi & 
+                                         mRNA %in% mRNA_candi)
+mRNA_miR_cor = mRNA_miR_cor %>% filter(miRNA %in% mir_candi & 
+                                         mRNA %in% mRNA_candi)
+
+
+#2. starbase data retrive-------------------------------------
+family=read.table("mm10_all_fimaly.txt",sep="\t")
+miRNA=unlist(strsplit(as.character(family$V4),","))
+
+#miR-mRNA
+miR_ENCORI = intersect(miRNA,mir_candi)
+getwd()
+dir.create("miR_mRNA_new")
+setwd('C:/Users/10613/Desktop/纯办法/code-down_new/code-down_new/miR_mRNA/')
+for(mir in miR_ENCORI){
+  file=paste("mRNA_",mir,".txt",sep="")
+  link=paste("http://starbase.sysu.edu.cn/api/miRNATarget/?assembly=mm10&geneType=mRNA&miRNA=",mir,"&clipExpNum=1&degraExpNum=0&pancancerNum=0&programNum=1&program=None&target=all",
+             sep="")
+  download.file(link,file)
+  Sys.sleep(1)
+}
+
+#miR-lncRNA
+miR_ENCORI = intersect(miRNA,mir_candi)
+getwd()
+dir.create("lncRNA-miR")
+setwd("C:/Users/10613/Desktop/纯办法/code-down_new/code-down_new/lncRNA-miR/")
+for(mir in miR_ENCORI){
+  file=paste("lncRNA_",mir,".txt",sep="")
+  link=paste("http://starbase.sysu.edu.cn/api/miRNATarget/?assembly=mm10&geneType=lncRNA&miRNA=",mir,"&clipExpNum=1&degraExpNum=0&pancancerNum=0&programNum=1&program=None&target=all",sep="")
+  download.file(link,file)
+  Sys.sleep(1)
+}
+#拼接下载到的mRNA_mir预测关系
+rm(list = ls())
+options(stringsAsFactors = F)
+getwd()
+library(tidyverse)
+library(readxl)
+library(writexl)
+getwd()
+setwd("C:/Users/10613/Desktop/纯办法/code-down_new/code-down_new/miR_mRNA/")
+flies=list.files(pattern = "mmu-miR")
+filelent <- length(flies)
+newdatat <- c()
+for (i in 1:58) {
+  temp <- read.table(flies[i],row.names = NULL)
+  newdatat=rbind(newdatat,temp)
+}
+
+colnames(newdatat) = c(colnames(newdatat)[2:22],'')
+
+df<-newdatat
+miR_mRNA = data.frame(fromNode = df$geneID,
+                      toNode = df$miRNAname,
+                      altNode1Name = df$geneName)
+miR_mRNA = miR_mRNA[order(miR_mRNA$altNode1Name),]
+table(miR_mRNA$toNode)
+
+#尝试拼接找到的lncRNA关系对
+getwd()
+library(tidyverse)
+library(readxl)
+library(writexl)
+getwd()
+setwd("C:/Users/10613/Desktop/纯办法/code-down_new/code-down_new/lncRNA-miR/")
+flies=list.files(pattern = "mmu-miR")
+filelent <- length(flies)
+newdatat <- c()
+i<-1
+for (i in 1:58) {
+  temp <- read.table(flies[i],row.names = NULL,sep = "\t")#设置制表符为间隔可以消除乱码的影响
+  newdatat=rbind(newdatat,temp)
+}
+
+colnames(newdatat) = c(colnames(newdatat)[2:17],'')
+
+df<-newdatat
+lnc_miRNA = data.frame(fromNode = df$geneID,
+                       toNode = df$miRNAname,
+                       altNode1Name = df$geneName,
+                       genetype = df$geneType)
+miR_lnc = lnc_miRNA[order(lnc_miRNA$altNode1Name),]
+table(miR_lnc$toNode)
+
+table()
+
+save(miR_lnc,miR_mRNA ,file = 'networklong.Rdata')
+#
+load(file = "networklong.Rdata")
+
+#从目标mRNA下手：这一步选择执行：
+key_mRNA<-read.table(file = "old_GO肝再生相关通路1.txt",sep = "\t")
+key_mRNA=unlist(strsplit(as.character(key_mRNA$V9),"/"))
+key_mRNA<-unique(key_mRNA)
+key_mRNA<-intersect(key_mRNA,mRNA_candi)
+
+#粗糙的筛选一下：这里先构建整体网络不从增殖相关下手：，
+key_miR_mRNA<-miR_mRNA[miR_mRNA$altNode1Name%in%mRNA_candi,]
+key_miR_mRNA<-key_miR_mRNA[key_miR_mRNA$toNode%in%mir_candi,]
+key_miR_mRNA<-unique(key_miR_mRNA)
+table(key_miR_mRNA$toNode)
+table(key_miR_mRNA$altNode1Name)
+#严格按照相关性一一对应
+#mRNA_miRNA，采用tiydr包来实现功能
+library(tidyr)
+key_miR_mRNA$list<-c(1:nrow(key_miR_mRNA))#添加一行编号方便后续筛选
+key_miR_mRNA_unite<-unite(key_miR_mRNA,"toNode_altNode1Name",toNode,altNode1Name)#将之前粗略筛选的MIR与mRNA的关系拼接一下
+mRNA_miR_cor_unite<-unite(mRNA_miR_cor,"miRNA_mRNA",miRNA,mRNA)#将有相关性的对子拼接
+key_miR_mRNA_unite<-key_miR_mRNA_unite[key_miR_mRNA_unite$toNode_altNode1Name%in%mRNA_miR_cor_unite$miRNA_mRNA,]#后续的筛选
+list<-key_miR_mRNA_unite$list
+key_miR_mRNA<-key_miR_mRNA[key_miR_mRNA$list%in%list,]
+
+#miRNA_lnc也是相同的方法
+
+key_miR_lnc<-miR_lnc[miR_lnc$toNode%in%key_miR_mRNA$toNode,]
+key_miR_lnc$list<-c(1:nrow(key_miR_lnc))
+key_miR_lnc_unite<-unite(key_miR_lnc,"toNode_altNode1Name",toNode,altNode1Name)
+lnc_miR_cor_unite<-unite(lnc_miR_cor,"miRNA_gene_name",miRNA,gene_name)
+key_miR_lnc_unite<-key_miR_lnc_unite[key_miR_lnc_unite$toNode_altNode1Name%in%lnc_miR_cor_unite$miRNA_gene_name,]
+list<-key_miR_lnc_unite$list
+key_miR_lnc<-key_miR_lnc[key_miR_lnc$list%in%list,]
+table(key_miR_mRNA$toNode)
+#反向过滤一波
+key_miR_mRNA<-key_miR_mRNA[key_miR_mRNA$toNode%in%key_miR_lnc$toNode,]
+#限制lnc与mRNA的相关性#采用for循环来确定
+i<-1
+a<-c()
+for (i in c(1:nrow(key_miR_mRNA))) {  #将之前筛选的MIR_MRNA关系对的每一各MRNA都拿出来
+  x<-key_miR_mRNA[i,"altNode1Name"]
+  y<-key_miR_mRNA[i,"toNode"]：MRNA对应的MIRNA
+  z<-key_miR_lnc[key_miR_lnc$toNode==y,"altNode1Name"]#当前构建表格中与mRNA对应的miRNA,在上面构建的LNC_MIR关系对中对应的lncRNA
+  c<-mRNA_lnc_cor[mRNA_lnc_cor$gene_name%in%z,"mRNA"]：将相关性表中的上述LNC有相关性的所有mRNA拿出来
+  if(x%in%c){a<-c (a,i)}#如果这个基因在上述的基因集里，就将序号加入a中
+}
+
+key_miR_mRNA<-key_miR_mRNA[a,]#筛选有lnc相关的关系对
+table(key_miR_mRNA$toNode)
+#再过滤一波
+
+key_miR_lnc<-key_miR_lnc[key_miR_lnc$toNode%in%key_miR_mRNA$toNode,]
+
+
+#构建网络所需数据
+mRNA_mir<-data.frame(gene = key_miR_mRNA$altNode1Name,mir = key_miR_mRNA$toNode,type = c(rep("mRNA",nrow(key_miR_mRNA))))
+lnc_mir<-data.frame(gene = key_miR_lnc$altNode1Name,mir =key_miR_lnc$toNode,type = c(rep("lnc",nrow(key_miR_lnc))))
+ network<-rbind(mRNA_mir,lnc_mir)
+ network<-unique(network)
+mir_type<-mRNA_mir[,c(2,3)]
+colnames(mir_type)<-c("gene","type")
+mir_type<-unique(mir_type)
+
+mir_type$type<-c(rep("mir",nrow(mir_type)))
+mir_type<-unique(mir_type)
+lnc_mrna_type<-network[,c(1,3)]
+lnc_mrna_type<-unique(lnc_mrna_type)
+type<-rbind(lnc_mrna_type,mir_type)
+mir<-type[type$type=="mir",1]
+lnc<-type[type$type=="lnc",1]
+mRNA<-type[type$type=="mRNA",1]
+write.table(network,file = "network.txt",sep = "\t",row.names = F)
+write.table(type,file = "type.txt",sep = "\t",row.names = F)
+write.table(mir,file = "mir.txt",sep = "\t",row.names = F)
+write.table(lnc,file = "lnc.txt",sep = "\t",row.names = F)
+write.table(mRNA,file = "mRNA.txt",sep = "\t",row.names = F)
