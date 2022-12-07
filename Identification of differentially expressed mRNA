@@ -1,0 +1,115 @@
+rm(list = ls())
+options(stringsAsFactors = F)
+library(stringr)
+
+## ====================1.读取数据
+# 读取raw count表达矩阵并且加上注释
+mRNA_count = read.csv(file = '../code-down_new/data/mRNA_genes.readcount.csv')
+mRNA_FPKM = read.csv(file = 'data/mRNA_gene.FPKM.csv')
+
+ID = mRNA_FPKM[,1:2]
+mRNA_count = merge(mRNA_count,ID, by.x = 'geneID', by.y = 'gene_id')
+row.names(mRNA_count) = mRNA_count$gene_name
+mRNA_count = mRNA_count[,-c(1,32)]
+row.names(mRNA_FPKM) = mRNA_FPKM$gene_name
+mRNA_FPKM = mRNA_FPKM[,-c(1:3)]
+save(mRNA_count,mRNA_FPKM,mRNA_FPKM,file = "mRNA_count.Rdata")
+load(file ="mRNA_count.Rdata" )
+rawcount<-mRNA_count[,c(25:30,1:6)]#取需要求差异的组
+#构建分组信息
+
+group<-data.frame(x = colnames(rawcount),y = c(rep("72H",6),rep("0H",6)))
+
+#过滤低表达基因
+keep <- rowSums(rawcount>0) >= floor(0.75*ncol(rawcount))
+table(keep)
+
+filter_count <- rawcount[keep,]
+filter_count[1:4,1:4]
+dim(filter_count)
+# 加载edgeR包计算counts per millio(cpm) 表达矩阵
+library(edgeR)
+express_cpm <- cpm(filter_count)
+express_cpm[1:6,1:6]
+
+# 保存表达矩阵和分组结果
+save(filter_count, express_cpm, group, file = "data/Step01-airwayData.Rdata")
+
+#开始差异分析
+rm(list = ls())
+options(stringsAsFactors = F)
+
+# 加载包
+library(edgeR)
+library(ggplot2)
+
+# 读取基因表达矩阵信息并查看分组信息和表达矩阵数据
+lname <- load(file = "data/Step01-airwayData.Rdata")
+lname
+
+# 表达谱
+filter_count[1:4,1:4]
+
+# 分组信息
+group_list <- group[match(colnames(filter_count),group$x),2]
+group_list
+
+comp <- unlist(strsplit("72H_vs_0H",split = "_vs_"))
+group_list <- factor(group_list,levels = comp)
+group_list
+table(group_list)
+# 构建线性模型。0代表x线性模型的截距为0
+design <- model.matrix(~0+group_list)
+rownames(design) <- colnames(filter_count)
+colnames(design) <- levels(factor(group_list))
+design
+
+# 构建edgeR的DGEList对象
+DEG <- DGEList(counts=filter_count, 
+               group=factor(group_list))
+
+# 归一化基因表达分布
+DEG <- calcNormFactors(DEG)
+
+# 计算线性模型的参数
+DEG <- estimateGLMCommonDisp(DEG,design)
+DEG <- estimateGLMTrendedDisp(DEG, design)
+DEG <- estimateGLMTagwiseDisp(DEG, design)
+
+# 拟合线性模型
+fit <- glmFit(DEG, design)
+
+# 进行差异分析
+lrt <- glmLRT(fit, contrast=c(1,-1)) 
+
+# 提取过滤差异分析结果
+DEG_edgeR <- as.data.frame(topTags(lrt, n=nrow(DEG)))
+head(DEG_edgeR)
+
+# 筛选上下调，设定阈值
+fc_cutoff <- 1.5
+pvalue <- 0.05
+
+DEG_edgeR$regulated <- "normal"
+
+loc_up <- intersect(which( DEG_edgeR$logFC > log2(fc_cutoff) ),
+                    which( DEG_edgeR$PValue < pvalue) )
+
+loc_down <- intersect(which(DEG_edgeR$logFC < (-log2(fc_cutoff))),
+                      which(DEG_edgeR$PValue<pvalue))
+
+DEG_edgeR$regulated[loc_up] <- "up"
+DEG_edgeR$regulated[loc_down] <- "down"
+
+table(DEG_edgeR$regulated)
+
+
+
+# 选择显著差异表达的结果
+library(tidyverse)
+DEG_edgeR_symbol_Sig <- filter(DEG_edgeR,regulated!="normal")
+
+# 保存
+write.csv(DEG_edgeR,"result/4.DEG_edgeR_E_A_ALL.csv", row.names = T)
+write.csv(DEG_edgeR_symbol_Sig,"result/4.DEG_edgeR_Sig_E_A.csv", row.names = T)
+#重复四次，每次更改文件名
